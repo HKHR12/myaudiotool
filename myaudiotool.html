@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Monitor EQ MEMO(alpha ver.)</title>
+  <style>
+    body { font-family: sans-serif; background:#111; color:white; margin: 0; padding: 10px; padding-bottom: 50px; }
+    .row { display:flex; justify-content:space-between; padding:8px; border-bottom:1px solid #333; align-items:center; transition: background 0.2s; }
+    .highlight-band { background: #ff3b30 !important; color: white; }
+    
+    select, input { background:#222; color:white; padding:4px; font-size:16px; border-radius: 4px; border: 1px solid #444; }
+    h2, h3 { text-align:center; margin-bottom: 10px; }
+    button { margin:4px; padding:8px 12px; font-size:13px; cursor: pointer; border-radius: 4px; border: none; background: #444; color: white; }
+    button:active { background: #666; }
+    .section { margin-top:20px; border: 1px solid #333; padding: 10px; border-radius: 8px; }
+    .cut { color:#4da6ff; font-weight:bold; margin-bottom: 5px; }
+    .status { font-size:12px; margin-left:6px; color:#00ff99; }
+    .editor { text-align:center; margin-bottom: 20px; background: #222; padding: 15px; border-radius: 8px; }
+    .band-op { display: flex; justify-content: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+    /* ハウリング検知セクション */
+    #analyzerSection { background: #000; padding: 15px; border-radius: 8px; }
+    .analyzer-main { display: flex; gap: 10px; align-items: flex-start; margin-top: 10px; }
+    .canvas-container { position: relative; flex-grow: 1; }
+    canvas { width: 100%; height: 200px; background: #000; border-bottom: 2px solid #444; display: block; }
+    
+    .history-box { width: 100px; background: #1a1a1a; padding: 5px; border-radius: 4px; border: 1px solid #333; font-size: 11px; min-height: 200px; }
+    .history-item { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid #222; }
+    .history-title { font-weight: bold; color: #ffeb3b; text-align: center; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 2px; }
+
+    .detect-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+    .detect-box { background: #222; padding: 10px; border-radius: 8px; border: 1px solid #444; text-align: center; }
+    .detect-label { font-size: 11px; color: #aaa; margin-bottom: 5px; }
+    .detect-value { font-size: 22px; color: #ffeb3b; font-weight: bold; }
+
+    .detect-btn { background: #007AFF; padding: 15px; width: 100%; font-size: 16px; font-weight: bold; margin-top: 10px; }
+    .detect-btn.active { background: #ff3b30; }
+  </style>
+</head>
+<body>
+
+<h2>Monitor EQ MEMO(alpha ver.)</h2>
+
+<div class="editor">
+  <h3>▼ 楽器を選択してください</h3>
+  <div id="instrumentButtons"></div>
+  <br>
+  <button onclick="resetEditOnly()" style="background: #622;">現在の編集内容のリセット</button>
+</div>
+
+<div class="section">
+  <h3>▼ カット中の帯域</h3>
+  <div id="cutList"></div>
+</div>
+
+<div class="section">
+  <h3>▼ EQメモ</h3>
+  
+  <div class="band-op">
+    <input type="text" id="bandInput" placeholder="周波数(例: 750)">
+    <button onclick="addBand()" style="background: #2a4;">帯域の追加</button>
+    <button onclick="removeBand()" style="background: #a22;">帯域の削除</button>
+  </div>
+  <p style="font-size: 10px; text-align: center; color: #888; margin-top: 5px;">※20Hz〜20kHzの範囲。1k等の表記も可能です。</p>
+
+  <div id="eq" style="margin-top: 15px;"></div>
+</div>
+
+<div class="section" id="analyzerSection">
+  <h3>▼ リアルタイム・ハウリング検知</h3>
+  <div class="detect-grid">
+    <div class="detect-box">
+      <div class="detect-label">現在のピーク</div>
+      <div id="peakFreq" class="detect-value">--- Hz</div>
+    </div>
+    <div class="detect-box">
+      <div class="detect-label">近似EQバンド</div>
+      <div id="targetBand" class="detect-value">--- Hz</div>
+    </div>
+  </div>
+
+  <div class="analyzer-main">
+    <div class="canvas-container">
+      <canvas id="visualizer"></canvas>
+      <div id="canvasLabels" style="position:relative; height: 35px; font-size: 9px; overflow: hidden; color: #888;"></div>
+    </div>
+    <div class="history-box">
+      <div class="history-title">1分間の頻出</div>
+      <div id="historyList"></div>
+    </div>
+  </div>
+  
+  <button id="detectBtn" class="detect-btn">ハウリング検知を開始します</button>
+</div>
+
+<script>
+const instruments = ["vocal", "drum", "bass", "guitar"];
+let bands = ["80","100","125","160","200","250","315","400","500","630","800","1k","1.25k","1.6k","2k","2.5k","3.15k","4k","5k","6.3k","8k"];
+const options = [{value: 0, label:"フラット"},{value:-3, label:"1切り"},{value:-6, label:"2切り"},{value:-9, label:"3切り"}];
+let eq = {};
+let audioCtx = null, currentOsc = null, currentGain = null, stopTimer = null;
+let analyser = null, isAnalysing = false, historyData = [];
+
+const canvas = document.getElementById('visualizer');
+const ctx = canvas.getContext('2d');
+const peakDisplay = document.getElementById('peakFreq');
+const targetDisplay = document.getElementById('targetBand');
+const detectBtn = document.getElementById('detectBtn');
+const historyListDiv = document.getElementById('historyList');
+
+function parseFreq(str) {
+  if (typeof str !== 'string') return parseFloat(str);
+  let val = str.toLowerCase();
+  if (val.includes("k")) return parseFloat(val.replace("k", "")) * 1000;
+  return parseFloat(val);
+}
+
+function formatFreqLabel(num) {
+  if (num >= 1000) return (Math.round(num / 100) / 10) + "k";
+  return Math.round(num).toString();
+}
+
+function init() {
+  const container = document.getElementById("instrumentButtons");
+  instruments.forEach(inst => {
+    const div = document.createElement("div");
+    div.style.marginBottom = "8px";
+    div.innerHTML = `
+      <button onclick="load('${inst}')"><strong>${inst.toUpperCase()}</strong> 読込</button> 
+      <button onclick="save('${inst}')">保存</button> 
+      <button onclick="resetWithSave('${inst}')">削除</button> 
+      <span id="status_${inst}" class="status"></span>
+    `;
+    container.appendChild(div);
+  });
+  bands.forEach(b => eq[b] = 0);
+  updateStatus();
+  render();
+}
+
+/* 試聴再生（250Hz〜2.5kHz制限） */
+function playTone(label) {
+  const freq = parseFreq(label);
+  if (isNaN(freq)) return;
+  if (freq < 250 || freq > 2500) return;
+
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  stopTone();
+  currentOsc = audioCtx.createOscillator();
+  currentGain = audioCtx.createGain();
+  currentOsc.type = "sine";
+  currentOsc.frequency.value = freq;
+  currentGain.gain.value = 0.05;
+  currentOsc.connect(currentGain);
+  currentGain.connect(audioCtx.destination);
+  currentOsc.start();
+  stopTimer = setTimeout(stopTone, 800);
+}
+
+function stopTone() {
+  if (currentOsc) { try { currentOsc.stop(); } catch(e){} currentOsc.disconnect(); currentOsc = null; }
+  if (stopTimer) clearTimeout(stopTimer);
+}
+
+/* アナライザー */
+detectBtn.onclick = async () => {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+
+  if (isAnalysing) {
+    isAnalysing = false;
+    detectBtn.textContent = "ハウリング検知を開始します";
+    detectBtn.classList.remove('active');
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 4096;
+    analyser.smoothingTimeConstant = 0.5;
+    source.connect(analyser);
+    isAnalysing = true;
+    detectBtn.textContent = "解析を停止します";
+    detectBtn.classList.add('active');
+    draw();
+  } catch (err) { alert("マイクの使用を許可してください。"); }
+};
+
+function draw() {
+  if (!isAnalysing) return;
+  requestAnimationFrame(draw);
+
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+  analyser.getByteFrequencyData(dataArray);
+
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  let maxVal = 0, maxIndex = -1, sum = 0;
+  const logBase = Math.log10(bufferLength);
+
+  for (let i = 0; i < bufferLength; i++) {
+    const val = dataArray[i];
+    sum += val;
+    if (val > maxVal) { maxVal = val; maxIndex = i; }
+    
+    let x = (Math.log10(i + 1) / logBase) * canvas.width;
+    let nextX = (Math.log10(i + 2) / logBase) * canvas.width;
+    let w = nextX - x;
+    const barHeight = (val / 255) * canvas.height;
+    ctx.fillStyle = val > 220 ? '#ff3b30' : '#00ff99';
+    ctx.fillRect(x, canvas.height - barHeight, w + 1, barHeight);
+  }
+
+  const average = sum / bufferLength;
+
+  if (maxVal > 165 && maxVal > average + 75) {
+    const rawFreq = Math.round(maxIndex * audioCtx.sampleRate / analyser.fftSize);
+    peakDisplay.textContent = formatFreqLabel(rawFreq) + " Hz";
+    findNearest(rawFreq);
+  } else {
+    if(Math.random() > 0.95) clearHighlights();
+  }
+  
+  updateHistory();
+}
+
+function findNearest(detectedFreq) {
+  let nearestLabel = null;
+  let minDiff = Infinity;
+  bands.forEach(b => {
+    const f = parseFreq(b);
+    const diff = Math.abs(f - detectedFreq);
+    if (diff < minDiff && diff < f * 0.12) { minDiff = diff; nearestLabel = b; }
+  });
+
+  if (nearestLabel) {
+    targetDisplay.textContent = nearestLabel + " Hz";
+    if (historyData.length === 0 || Date.now() - historyData[historyData.length-1].time > 600) {
+      historyData.push({ time: Date.now(), band: nearestLabel });
+    }
+    
+    document.querySelectorAll('.row').forEach(row => {
+      if (row.querySelector('strong').innerText === nearestLabel + "Hz") row.classList.add('highlight-band');
+      else row.classList.remove('highlight-band');
+    });
+  }
+}
+
+function updateHistory() {
+  const now = Date.now();
+  historyData = historyData.filter(h => now - h.time < 60000);
+  const counts = {};
+  historyData.forEach(h => counts[h.band] = (counts[h.band] || 0) + 1);
+  const sorted = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  historyListDiv.innerHTML = sorted.slice(0, 8).map(band => `
+    <div class="history-item"><span>${band}Hz</span><span>${counts[band]}回</span></div>
+  `).join('');
+}
+
+function clearHighlights() {
+  document.querySelectorAll('.row').forEach(row => row.classList.remove('highlight-band'));
+}
+
+function render() {
+  bands.sort((a,b) => parseFreq(a) - parseFreq(b));
+  const container = document.getElementById("eq");
+  const cutContainer = document.getElementById("cutList");
+  const labelContainer = document.getElementById("canvasLabels");
+  
+  container.innerHTML = "";
+  cutContainer.innerHTML = "";
+  labelContainer.innerHTML = "";
+
+  const logBase = Math.log10(2048);
+
+  bands.forEach(b => {
+    const f = parseFreq(b);
+    const index = (f * 4096) / (audioCtx ? audioCtx.sampleRate : 44100);
+    const xPos = (Math.log10(index + 1) / logBase) * 100;
+    if (xPos >= 0 && xPos <= 100) {
+      const l = document.createElement("div");
+      l.style.position = "absolute";
+      l.style.left = xPos + "%";
+      l.style.transform = "translateX(-50%) rotate(45deg)";
+      l.style.whiteSpace = "nowrap";
+      l.innerText = b;
+      labelContainer.appendChild(l);
+    }
+
+    if (eq[b] < 0) {
+      const opt = options.find(o => o.value == eq[b]);
+      cutContainer.innerHTML += `<div class="cut">${b}Hz : ${opt.label}</div>`;
+    }
+    const row = document.createElement("div");
+    row.className = "row";
+    const toneBtn = (f >= 250 && f <= 2500) ? `<button onclick="playTone('${b}')">試聴</button>` : `<div style="width:50px"></div>`;
+    let selectHTML = `<select onchange="change('${b}', this.value)">`;
+    options.forEach(o => { selectHTML += `<option value="${o.value}" ${eq[b] == o.value ? "selected" : ""}>${o.label}</option>`; });
+    selectHTML += `</select>`;
+    row.innerHTML = `<span><strong>${b}Hz</strong></span> ${toneBtn} ${selectHTML}`;
+    container.appendChild(row);
+  });
+}
+
+/* 帯域操作ロジック */
+function addBand() {
+  const input = document.getElementById("bandInput").value.trim();
+  if(!input) return;
+  const fVal = parseFreq(input);
+  if (isNaN(fVal) || fVal < 20 || fVal > 20000 || bands.includes(input)) {
+    alert("正しい周波数を入力してください。既に存在する帯域は追加できません。");
+    return;
+  }
+  bands.push(input);
+  eq[input] = 0;
+  document.getElementById("bandInput").value = "";
+  render();
+}
+
+function removeBand() {
+  const input = document.getElementById("bandInput").value.trim();
+  const index = bands.indexOf(input);
+  if(index === -1) {
+    alert("指定された帯域が見つかりませんでした。");
+    return;
+  }
+  bands.splice(index, 1);
+  delete eq[input];
+  document.getElementById("bandInput").value = "";
+  render();
+}
+
+function change(b, value) { eq[b] = parseInt(value); render(); }
+function save(type) { localStorage.setItem("eq_" + type, JSON.stringify(eq)); updateStatus(); alert("設定を保存しました。"); }
+function load(type) {
+  const data = localStorage.getItem("eq_" + type);
+  if (data) { eq = JSON.parse(data); bands = Object.keys(eq); } 
+  else { bands.forEach(b => eq[b] = 0); }
+  render();
+}
+function resetEditOnly() { bands.forEach(b => eq[b]=0); render(); }
+function resetWithSave(type) { if(confirm("保存されているデータを削除しますか？")) { localStorage.removeItem("eq_" + type); updateStatus(); } }
+function updateStatus() { instruments.forEach(t => { document.getElementById("status_" + t).innerText = localStorage.getItem("eq_" + t) ? "●保存済" : ""; }); }
+
+init();
+</script>
+</body>
+</html>
