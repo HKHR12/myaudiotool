@@ -3,10 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Monitor EQ MEMO(alpha ver.)</title>
+  <title>軽音EQヘルパー君(alpha ver.)</title>
   <style>
+    /* -----------------------------------------
+        デザイン設定（CSS）
+    ----------------------------------------- */
     body { font-family: sans-serif; background:#111; color:white; margin: 0; padding: 10px; padding-bottom: 50px; }
     .row { display:flex; justify-content:space-between; padding:8px; border-bottom:1px solid #333; align-items:center; transition: background 0.2s; }
+    
+    /* ハウリング検知時に赤く光らせるスタイル */
     .highlight-band { background: #ff3b30 !important; color: white; }
     
     select, input { background:#222; color:white; padding:4px; font-size:16px; border-radius: 4px; border: 1px solid #444; }
@@ -19,34 +24,42 @@
     .editor { text-align:center; margin-bottom: 20px; background: #222; padding: 15px; border-radius: 8px; }
     .band-op { display: flex; justify-content: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
-    /* ハウリング検知セクション */
+    /* ビジュアライザー（波形表示）周りの設定 */
     #analyzerSection { background: #000; padding: 15px; border-radius: 8px; }
-    .analyzer-main { display: flex; gap: 10px; align-items: flex-start; margin-top: 10px; }
-    .canvas-container { position: relative; flex-grow: 1; }
-    canvas { width: 100%; height: 200px; background: #000; border-bottom: 2px solid #444; display: block; }
+    .analyzer-main { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+    .canvas-container { position: relative; width: 100%; }
+    canvas { width: 100%; height: 180px; background: #000; border-bottom: 2px solid #444; display: block; }
     
-    .history-box { width: 100px; background: #1a1a1a; padding: 5px; border-radius: 4px; border: 1px solid #333; font-size: 11px; min-height: 200px; }
-    .history-item { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid #222; }
+    .history-box { width: 100%; background: #1a1a1a; padding: 10px; border-radius: 4px; border: 1px solid #333; font-size: 13px; box-sizing: border-box; }
+    .history-item { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #222; }
     .history-title { font-weight: bold; color: #ffeb3b; text-align: center; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 2px; }
 
     .detect-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
     .detect-box { background: #222; padding: 10px; border-radius: 8px; border: 1px solid #444; text-align: center; }
     .detect-label { font-size: 11px; color: #aaa; margin-bottom: 5px; }
-    .detect-value { font-size: 22px; color: #ffeb3b; font-weight: bold; }
+    .detect-value { font-size: 20px; color: #ffeb3b; font-weight: bold; }
 
     .detect-btn { background: #007AFF; padding: 15px; width: 100%; font-size: 16px; font-weight: bold; margin-top: 10px; }
     .detect-btn.active { background: #ff3b30; }
+
+    /* 注意書き用スタイル */
+    .warning-note { font-size: 12px; color: #aaa; margin-top: 20px; text-align: center; line-height: 1.6; }
+
+    @media (min-width: 600px) {
+      .analyzer-main { flex-direction: row; }
+      .history-box { width: 150px; }
+    }
   </style>
 </head>
 <body>
 
-<h2>Monitor EQ MEMO(alpha ver.)</h2>
+<h2>EQヘルパー君(alpha ver.)</h2>
 
 <div class="editor">
-  <h3>▼ 楽器を選択してください</h3>
+  <h3>▼ 楽器の選択</h3>
   <div id="instrumentButtons"></div>
   <br>
-  <button onclick="resetEditOnly()" style="background: #622;">現在の編集内容のリセット</button>
+  <button onclick="resetEditOnly()" style="background: #622;">現在の設定をリセット</button>
 </div>
 
 <div class="section">
@@ -56,26 +69,24 @@
 
 <div class="section">
   <h3>▼ EQメモ</h3>
-  
   <div class="band-op">
-    <input type="text" id="bandInput" placeholder="周波数(例: 750)">
-    <button onclick="addBand()" style="background: #2a4;">帯域の追加</button>
-    <button onclick="removeBand()" style="background: #a22;">帯域の削除</button>
+    <input type="text" id="bandInput" placeholder="周波数(例: 800)">
+    <button onclick="addBand()" style="background: #2a4;">帯域を追加</button>
+    <button onclick="removeBand()" style="background: #a22;">帯域を削除</button>
   </div>
-  <p style="font-size: 10px; text-align: center; color: #888; margin-top: 5px;">※20Hz〜20kHzの範囲。1k等の表記も可能です。</p>
-
+  <p style="font-size: 10px; text-align: center; color: #888; margin-top: 8px;">※20Hz〜20kHz。1k等の表記もOK！</p>
   <div id="eq" style="margin-top: 15px;"></div>
 </div>
 
 <div class="section" id="analyzerSection">
-  <h3>▼ リアルタイム・ハウリング検知</h3>
+  <h3>▼ ハウリング検知</h3>
   <div class="detect-grid">
     <div class="detect-box">
-      <div class="detect-label">現在のピーク</div>
+      <div class="detect-label">ピーク周波数</div>
       <div id="peakFreq" class="detect-value">--- Hz</div>
     </div>
     <div class="detect-box">
-      <div class="detect-label">近似EQバンド</div>
+      <div class="detect-label">近似帯域</div>
       <div id="targetBand" class="detect-value">--- Hz</div>
     </div>
   </div>
@@ -83,7 +94,7 @@
   <div class="analyzer-main">
     <div class="canvas-container">
       <canvas id="visualizer"></canvas>
-      <div id="canvasLabels" style="position:relative; height: 35px; font-size: 9px; overflow: hidden; color: #888;"></div>
+      <div id="canvasLabels" style="position:relative; height: 45px; font-size: 10px; overflow: hidden; color: #aaa; margin-top: 5px;"></div>
     </div>
     <div class="history-box">
       <div class="history-title">1分間の頻出</div>
@@ -91,13 +102,22 @@
     </div>
   </div>
   
-  <button id="detectBtn" class="detect-btn">ハウリング検知を開始します</button>
+  <button id="detectBtn" class="detect-btn">検知を開始</button>
+</div>
+
+<div class="warning-note">
+  このハウリング検知機能は、マイクの性能や周囲の騒音、反響によって誤差が生じることがあります。<br>
+  あくまで補助的な目安として利用し、最終的な調整は必ず自分自身の耳で聴いて、音の違和感や音質を判断してくださいね。
 </div>
 
 <script>
+/* -----------------------------------------
+   グローバル変数・初期設定
+----------------------------------------- */
 const instruments = ["vocal", "drum", "bass", "guitar"];
 let bands = ["80","100","125","160","200","250","315","400","500","630","800","1k","1.25k","1.6k","2k","2.5k","3.15k","4k","5k","6.3k","8k"];
 const options = [{value: 0, label:"フラット"},{value:-3, label:"1切り"},{value:-6, label:"2切り"},{value:-9, label:"3切り"}];
+
 let eq = {};
 let audioCtx = null, currentOsc = null, currentGain = null, stopTimer = null;
 let analyser = null, isAnalysing = false, historyData = [];
@@ -139,12 +159,9 @@ function init() {
   render();
 }
 
-/* 試聴再生（250Hz〜2.5kHz制限） */
 function playTone(label) {
   const freq = parseFreq(label);
-  if (isNaN(freq)) return;
-  if (freq < 250 || freq > 2500) return;
-
+  if (isNaN(freq) || freq < 250 || freq > 2500) return;
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   stopTone();
   currentOsc = audioCtx.createOscillator();
@@ -163,27 +180,24 @@ function stopTone() {
   if (stopTimer) clearTimeout(stopTimer);
 }
 
-/* アナライザー */
 detectBtn.onclick = async () => {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') audioCtx.resume();
-
   if (isAnalysing) {
     isAnalysing = false;
-    detectBtn.textContent = "ハウリング検知を開始します";
+    detectBtn.textContent = "検知を開始";
     detectBtn.classList.remove('active');
     return;
   }
-
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 4096;
-    analyser.smoothingTimeConstant = 0.5;
+    analyser.smoothingTimeConstant = 0.4;
     source.connect(analyser);
     isAnalysing = true;
-    detectBtn.textContent = "解析を停止します";
+    detectBtn.textContent = "検知を停止";
     detectBtn.classList.add('active');
     draw();
   } catch (err) { alert("マイクの使用を許可してください。"); }
@@ -212,20 +226,29 @@ function draw() {
     let nextX = (Math.log10(i + 2) / logBase) * canvas.width;
     let w = nextX - x;
     const barHeight = (val / 255) * canvas.height;
-    ctx.fillStyle = val > 220 ? '#ff3b30' : '#00ff99';
+
+    // 色分けロジックの変更
+    if (val > 240) {
+      ctx.fillStyle = '#ff3b30'; // 完全に赤い（確定に近い）
+    } else if (val > 200) {
+      ctx.fillStyle = '#ffeb3b'; // 黄色い（ハウリングの可能性あり）
+    } else {
+      ctx.fillStyle = '#00ff99'; // 緑色（安全）
+    }
+    
     ctx.fillRect(x, canvas.height - barHeight, w + 1, barHeight);
   }
 
   const average = sum / bufferLength;
 
-  if (maxVal > 165 && maxVal > average + 75) {
+  // ハウリング判定（赤レベルのみ判定に使用）
+  if (maxVal > 230 && maxVal > average + 95) {
     const rawFreq = Math.round(maxIndex * audioCtx.sampleRate / analyser.fftSize);
     peakDisplay.textContent = formatFreqLabel(rawFreq) + " Hz";
     findNearest(rawFreq);
   } else {
-    if(Math.random() > 0.95) clearHighlights();
+    if(Math.random() > 0.9) clearHighlights();
   }
-  
   updateHistory();
 }
 
@@ -235,15 +258,14 @@ function findNearest(detectedFreq) {
   bands.forEach(b => {
     const f = parseFreq(b);
     const diff = Math.abs(f - detectedFreq);
-    if (diff < minDiff && diff < f * 0.12) { minDiff = diff; nearestLabel = b; }
+    if (diff < minDiff && diff < f * 0.10) { minDiff = diff; nearestLabel = b; }
   });
 
   if (nearestLabel) {
     targetDisplay.textContent = nearestLabel + " Hz";
-    if (historyData.length === 0 || Date.now() - historyData[historyData.length-1].time > 600) {
+    if (historyData.length === 0 || Date.now() - historyData[historyData.length-1].time > 800) {
       historyData.push({ time: Date.now(), band: nearestLabel });
     }
-    
     document.querySelectorAll('.row').forEach(row => {
       if (row.querySelector('strong').innerText === nearestLabel + "Hz") row.classList.add('highlight-band');
       else row.classList.remove('highlight-band');
@@ -257,7 +279,7 @@ function updateHistory() {
   const counts = {};
   historyData.forEach(h => counts[h.band] = (counts[h.band] || 0) + 1);
   const sorted = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
-  historyListDiv.innerHTML = sorted.slice(0, 8).map(band => `
+  historyListDiv.innerHTML = sorted.slice(0, 6).map(band => `
     <div class="history-item"><span>${band}Hz</span><span>${counts[band]}回</span></div>
   `).join('');
 }
@@ -278,15 +300,16 @@ function render() {
 
   const logBase = Math.log10(2048);
 
-  bands.forEach(b => {
+  bands.forEach((b, i) => {
     const f = parseFreq(b);
     const index = (f * 4096) / (audioCtx ? audioCtx.sampleRate : 44100);
     const xPos = (Math.log10(index + 1) / logBase) * 100;
-    if (xPos >= 0 && xPos <= 100) {
+
+    if (xPos >= 0 && xPos <= 100 && (i % 2 === 0 || bands.length < 12)) {
       const l = document.createElement("div");
       l.style.position = "absolute";
       l.style.left = xPos + "%";
-      l.style.transform = "translateX(-50%) rotate(45deg)";
+      l.style.transform = "translateX(-20%) rotate(45deg)";
       l.style.whiteSpace = "nowrap";
       l.innerText = b;
       labelContainer.appendChild(l);
@@ -307,13 +330,12 @@ function render() {
   });
 }
 
-/* 帯域操作ロジック */
 function addBand() {
   const input = document.getElementById("bandInput").value.trim();
   if(!input) return;
   const fVal = parseFreq(input);
   if (isNaN(fVal) || fVal < 20 || fVal > 20000 || bands.includes(input)) {
-    alert("正しい周波数を入力してください。既に存在する帯域は追加できません。");
+    alert("正しい周波数を入力してください。");
     return;
   }
   bands.push(input);
@@ -326,7 +348,7 @@ function removeBand() {
   const input = document.getElementById("bandInput").value.trim();
   const index = bands.indexOf(input);
   if(index === -1) {
-    alert("指定された帯域が見つかりませんでした。");
+    alert("帯域が見つかりません。");
     return;
   }
   bands.splice(index, 1);
@@ -336,7 +358,7 @@ function removeBand() {
 }
 
 function change(b, value) { eq[b] = parseInt(value); render(); }
-function save(type) { localStorage.setItem("eq_" + type, JSON.stringify(eq)); updateStatus(); alert("設定を保存しました。"); }
+function save(type) { localStorage.setItem("eq_" + type, JSON.stringify(eq)); updateStatus(); alert("設定を保存しました"); }
 function load(type) {
   const data = localStorage.getItem("eq_" + type);
   if (data) { eq = JSON.parse(data); bands = Object.keys(eq); } 
@@ -344,7 +366,7 @@ function load(type) {
   render();
 }
 function resetEditOnly() { bands.forEach(b => eq[b]=0); render(); }
-function resetWithSave(type) { if(confirm("保存されているデータを削除しますか？")) { localStorage.removeItem("eq_" + type); updateStatus(); } }
+function resetWithSave(type) { if(confirm("保存データを削除しますか？")) { localStorage.removeItem("eq_" + type); updateStatus(); } }
 function updateStatus() { instruments.forEach(t => { document.getElementById("status_" + t).innerText = localStorage.getItem("eq_" + t) ? "●保存済" : ""; }); }
 
 init();
