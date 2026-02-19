@@ -23,6 +23,9 @@
     .editor { text-align:center; margin-bottom: 20px; background: #222; padding: 15px; border-radius: 8px; }
     .band-op { display: flex; justify-content: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
+    /* 試聴中のボタン用スタイル */
+    .playing { background: #ffeb3b !important; color: #000 !important; font-weight: bold; }
+
     #analyzerSection { background: #000; padding: 15px; border-radius: 8px; }
     .analyzer-main { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
     .canvas-container { position: relative; width: 100%; }
@@ -50,6 +53,11 @@
       .analyzer-main { flex-direction: row; }
       .history-box { width: 180px; }
     }
+
+    /* 修正：ページ遷移ボタンを目立たないテキストリンク形式に変更 */
+    .nav-container { margin-top: 50px; text-align: center; padding: 10px; border-top: 1px solid #333; }
+    .nav-btn { background: none; border: none; padding: 5px; font-size: 11px; color: #555; cursor: pointer; text-decoration: underline; width: auto; }
+    .nav-btn:hover { color: #888; background: none; }
   </style>
 </head>
 <body>
@@ -59,10 +67,10 @@
 <div class="editor">
   <h3>▼ 楽器の選択</h3>
   <div id="instrumentButtons"></div>
-  <span class="prompt-msg">※ 最初に楽器の「読込」ボタンを押すと、30秒ごとの自動保存が有効になります。</span>
+  <span class="prompt-msg">※ 最初に楽器の「読込」ボタンを押すと、10秒ごとの自動保存が有効になります。</span>
   <div id="autosaveStatus" class="autosave-msg"></div>
   <br>
-  <button onclick="resetEditOnly()" style="background: #622;">現在の設定をリセット</button>
+  <button onclick="resetToDefault()" style="background: #622;">現在の設定をリセット</button>
 </div>
 
 <div class="section">
@@ -76,6 +84,7 @@
     <input type="text" id="bandInput" placeholder="周波数(例: 800)">
     <button onclick="addBand()" style="background: #2a4;">帯域を追加</button>
     <button onclick="removeBand()" style="background: #a22;">帯域を削除</button>
+    <button onclick="allFlat()" style="background: #555;">全フラット</button>
   </div>
   <p style="font-size: 10px; text-align: center; color: #888; margin-top: 8px;">※20Hz〜20kHz。1k等の表記もOK！</p>
   <div id="eq" style="margin-top: 15px;"></div>
@@ -122,18 +131,25 @@
   あくまで補助的な目安として利用し、最終的な調整は必ず自分自身の耳で聴いて、音の違和感や音質を判断してくださいね。
 </div>
 
+<div class="nav-container">
+  <button class="nav-btn" onclick="checkPassword()">
+    開発者用ページへ
+  </button>
+</div>
+
 <script>
 /* -----------------------------------------
     グローバル変数・初期設定
 ----------------------------------------- */
 const instruments = ["vocal", "drum", "bass", "guitar"];
-let bands = ["80","100","125","160","200","250","315","400","500","630","800","1k","1.25k","1.6k","2k","2.5k","3.15k","4k","5k","6.3k","8k"];
-// ガイド帯域用の独立したリスト
-let guideBands = ["80","100","125","160","200","250","315","400","500","630","800","1k","1.25k","1.6k","2k","2.5k","3.15k","4k","5k","6.3k","8k"];
+const defaultBands = ["80","100","125","160","200","250","315","400","500","630","800","1k","1.25k","1.6k","2k","2.5k","3.15k","4k","5k","6.3k","8k"];
+let bands = [...defaultBands];
+let guideBands = [...defaultBands];
 const options = [{value: 0, label:"フラット"},{value:-3, label:"1切り"},{value:-6, label:"2切り"},{value:-9, label:"3切り"}];
 
 let eq = {};
 let audioCtx = null, currentOsc = null, currentGain = null, stopTimer = null;
+let currentPlayingFreq = null; 
 let analyser = null, isAnalysing = false, historyData = [];
 let currentInstrument = null; 
 
@@ -173,14 +189,22 @@ function init() {
   bands.forEach(b => eq[b] = 0);
   updateStatus();
   render();
-  setInterval(autoSave, 30000);
+  setInterval(autoSave, 10000); 
 }
 
+// 音声再生・停止のトグル（範囲を250Hz〜2.5kHzに制限）
 function playTone(label) {
   const freq = parseFreq(label);
   if (isNaN(freq) || freq < 250 || freq > 2500) return;
+
+  if (currentPlayingFreq === label) {
+    stopTone();
+    return;
+  }
+
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   stopTone();
+
   currentOsc = audioCtx.createOscillator();
   currentGain = audioCtx.createGain();
   currentOsc.type = "sine";
@@ -188,13 +212,24 @@ function playTone(label) {
   currentGain.gain.value = 0.05;
   currentOsc.connect(currentGain);
   currentGain.connect(audioCtx.destination);
+  
+  currentPlayingFreq = label;
   currentOsc.start();
-  stopTimer = setTimeout(stopTone, 800);
+  
+  render();
+
+  stopTimer = setTimeout(stopTone, 3000);
 }
 
 function stopTone() {
-  if (currentOsc) { try { currentOsc.stop(); } catch(e){} currentOsc.disconnect(); currentOsc = null; }
+  if (currentOsc) { 
+    try { currentOsc.stop(); } catch(e){} 
+    currentOsc.disconnect(); 
+    currentOsc = null; 
+  }
   if (stopTimer) clearTimeout(stopTimer);
+  currentPlayingFreq = null;
+  render(); 
 }
 
 detectBtn.onclick = async () => {
@@ -223,39 +258,25 @@ detectBtn.onclick = async () => {
 function draw() {
   if (!isAnalysing) return;
   requestAnimationFrame(draw);
-
   const bufferLength = analyser.frequencyBinCount;
   const dataArray = new Uint8Array(bufferLength);
   analyser.getByteFrequencyData(dataArray);
-
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-
   let maxVal = 0, maxIndex = -1, sum = 0;
   const logBase = Math.log10(bufferLength);
-
   for (let i = 0; i < bufferLength; i++) {
     const val = dataArray[i];
     sum += val;
     if (val > maxVal) { maxVal = val; maxIndex = i; }
-    
     let x = (Math.log10(i + 1) / logBase) * canvas.width;
     let nextX = (Math.log10(i + 2) / logBase) * canvas.width;
     let w = nextX - x;
     const barHeight = (val / 255) * canvas.height;
-
-    if (val > 240) {
-      ctx.fillStyle = '#ff3b30'; 
-    } else if (val > 200) {
-      ctx.fillStyle = '#ffeb3b'; 
-    } else {
-      ctx.fillStyle = '#00ff99'; 
-    }
+    ctx.fillStyle = val > 240 ? '#ff3b30' : (val > 200 ? '#ffeb3b' : '#00ff99');
     ctx.fillRect(x, canvas.height - barHeight, w + 1, barHeight);
   }
-
   const average = sum / bufferLength;
-
   if (maxVal > 200 && maxVal > average + 85) {
     const level = maxVal > 240 ? 'red' : 'yellow';
     const rawFreq = Math.round(maxIndex * audioCtx.sampleRate / analyser.fftSize);
@@ -270,19 +291,16 @@ function draw() {
 function findNearest(detectedFreq, level) {
   let nearestLabel = null;
   let minDiff = Infinity;
-  // ガイド用の帯域リストから最も近いものを探す
   guideBands.forEach(b => {
     const f = parseFreq(b);
     const diff = Math.abs(f - detectedFreq);
     if (diff < minDiff && diff < f * 0.10) { minDiff = diff; nearestLabel = b; }
   });
-
   if (nearestLabel) {
     targetDisplay.textContent = nearestLabel + " Hz";
     if (historyData.length === 0 || Date.now() - historyData[historyData.length-1].time > 800) {
       historyData.push({ time: Date.now(), band: nearestLabel, level: level });
     }
-    // 赤色検知時にEQ設定行をハイライト（EQリストに存在する場合のみ）
     if (level === 'red') {
         document.querySelectorAll('.row').forEach(row => {
           if (row.querySelector('strong').innerText === nearestLabel + "Hz") row.classList.add('highlight-band');
@@ -295,157 +313,107 @@ function findNearest(detectedFreq, level) {
 function updateHistory() {
   const now = Date.now();
   historyData = historyData.filter(h => now - h.time < 60000);
-  
-  const countsRed = {};
-  const countsYellow = {};
-  
+  const countsRed = {}, countsYellow = {};
   historyData.forEach(h => {
     if (h.level === 'red') countsRed[h.band] = (countsRed[h.band] || 0) + 1;
     else countsYellow[h.band] = (countsYellow[h.band] || 0) + 1;
   });
-
   const sortedRed = Object.keys(countsRed).sort((a, b) => countsRed[b] - countsRed[a]);
   const sortedYellow = Object.keys(countsYellow).sort((a, b) => countsYellow[b] - countsYellow[a]);
-
-  historyListRedDiv.innerHTML = sortedRed.slice(0, 3).map(band => `
-    <div class="history-item"><span>${band}Hz</span><span>${countsRed[band]}回</span></div>
-  `).join('');
-
-  historyListYellowDiv.innerHTML = sortedYellow.slice(0, 3).map(band => `
-    <div class="history-item"><span>${band}Hz</span><span>${countsYellow[band]}回</span></div>
-  `).join('');
+  historyListRedDiv.innerHTML = sortedRed.slice(0, 3).map(band => `<div class="history-item"><span>${band}Hz</span><span>${countsRed[band]}回</span></div>`).join('');
+  historyListYellowDiv.innerHTML = sortedYellow.slice(0, 3).map(band => `<div class="history-item"><span>${band}Hz</span><span>${countsYellow[band]}回</span></div>`).join('');
 }
 
-function clearHighlights() {
-  document.querySelectorAll('.row').forEach(row => row.classList.remove('highlight-band'));
-}
+function clearHighlights() { document.querySelectorAll('.row').forEach(row => row.classList.remove('highlight-band')); }
 
 function render() {
-  // リストのソート
   bands.sort((a,b) => parseFreq(a) - parseFreq(b));
   guideBands.sort((a,b) => parseFreq(a) - parseFreq(b));
-
-  const container = document.getElementById("eq");
-  const cutContainer = document.getElementById("cutList");
-  const labelContainer = document.getElementById("canvasLabels");
-  
-  container.innerHTML = "";
-  cutContainer.innerHTML = "";
-  labelContainer.innerHTML = "";
-
-  // 1. EQメモセクションの描画
+  const container = document.getElementById("eq"), cutContainer = document.getElementById("cutList"), labelContainer = document.getElementById("canvasLabels");
+  container.innerHTML = ""; cutContainer.innerHTML = ""; labelContainer.innerHTML = "";
   bands.forEach((b) => {
     const f = parseFreq(b);
     if (eq[b] < 0) {
       const opt = options.find(o => o.value == eq[b]);
       cutContainer.innerHTML += `<div class="cut">${b}Hz : ${opt.label}</div>`;
     }
-    const row = document.createElement("div");
-    row.className = "row";
-    const toneBtn = (f >= 250 && f <= 2500) ? `<button onclick="playTone('${b}')">試聴</button>` : `<div style="width:50px"></div>`;
-    let selectHTML = `<select onchange="change('${b}', this.value)">`;
-    options.forEach(o => { selectHTML += `<option value="${o.value}" ${eq[b] == o.value ? "selected" : ""}>${o.label}</option>`; });
-    selectHTML += `</select>`;
+    const row = document.createElement("div"); row.className = "row";
+    
+    const isPlaying = (currentPlayingFreq === b);
+    // ボタンの表示条件を 250Hz〜2500Hz に変更
+    const toneBtn = (f >= 250 && f <= 2500) 
+      ? `<button onclick="playTone('${b}')" class="${isPlaying ? 'playing' : ''}">${isPlaying ? '停止' : '試聴'}</button>` 
+      : `<div style="width:52px"></div>`; // ボタンがない場合の余白
+    
+    let selectHTML = `<select onchange="change('${b}', this.value)">${options.map(o => `<option value="${o.value}" ${eq[b] == o.value ? "selected" : ""}>${o.label}</option>`).join('')}</select>`;
     row.innerHTML = `<span><strong>${b}Hz</strong></span> ${toneBtn} ${selectHTML}`;
     container.appendChild(row);
   });
-
-  // 2. グラフ下のガイドラベル描画 (guideBandsを使用)
   const logBase = Math.log10(2048);
   guideBands.forEach((b) => {
-    const f = parseFreq(b);
-    const index = (f * 2048) / 22050; // 対数スケール近似
-    const xPos = (Math.log10(index + 1) / logBase) * 100;
-
+    const xPos = (Math.log10(((parseFreq(b) * 2048) / 22050) + 1) / logBase) * 100;
     if (xPos >= 0 && xPos <= 100) {
       const l = document.createElement("div");
-      l.style.position = "absolute";
-      l.style.left = xPos + "%";
-      l.style.transform = "translateX(-50%) rotate(90deg)"; // 完全に縦
-      l.style.transformOrigin = "top center";
-      l.style.whiteSpace = "nowrap";
-      l.style.paddingTop = "12px";
-      l.innerText = b;
-      labelContainer.appendChild(l);
+      l.style.position = "absolute"; l.style.left = xPos + "%"; l.style.transform = "translateX(-50%) rotate(90deg)";
+      l.style.transformOrigin = "top center"; l.style.whiteSpace = "nowrap"; l.style.paddingTop = "12px";
+      l.innerText = b; labelContainer.appendChild(l);
     }
   });
 }
 
-// EQ用
+function allFlat() {
+  if(confirm("表示中の帯域をすべてフラットにしますか？")) {
+    bands.forEach(b => eq[b] = 0);
+    render();
+  }
+}
+
+function resetToDefault() {
+  if(confirm("追加・削除した帯域を含め、初期状態に戻しますか？")) {
+    bands = [...defaultBands];
+    eq = {};
+    bands.forEach(b => eq[b] = 0);
+    render();
+  }
+}
+
 function addBand() {
   const input = document.getElementById("bandInput").value.trim();
   if(!input) return;
   const fVal = parseFreq(input);
-  if (isNaN(fVal) || fVal < 20 || fVal > 20000 || bands.includes(input)) {
-    alert("正しい周波数を入力してください。");
-    return;
-  }
-  bands.push(input);
-  eq[input] = 0;
-  document.getElementById("bandInput").value = "";
-  render();
+  if (isNaN(fVal) || fVal < 20 || fVal > 20000 || bands.includes(input)) { alert("正しい周波数を入力してください。"); return; }
+  bands.push(input); eq[input] = 0; document.getElementById("bandInput").value = ""; render();
 }
 
 function removeBand() {
   const input = document.getElementById("bandInput").value.trim();
   const index = bands.indexOf(input);
-  if(index === -1) {
-    alert("帯域が見つかりません。");
-    return;
-  }
-  bands.splice(index, 1);
-  delete eq[input];
-  document.getElementById("bandInput").value = "";
-  render();
+  if(index === -1) { alert("帯域が見つかりません。"); return; }
+  bands.splice(index, 1); delete eq[input]; document.getElementById("bandInput").value = ""; render();
 }
 
-// 検知ガイド用
 function addGuideBand() {
   const input = document.getElementById("guideBandInput").value.trim();
   if(!input) return;
   const fVal = parseFreq(input);
-  if (isNaN(fVal) || fVal < 20 || fVal > 20000 || guideBands.includes(input)) {
-    alert("正しい周波数を入力してください。");
-    return;
-  }
-  guideBands.push(input);
-  document.getElementById("guideBandInput").value = "";
-  render();
+  if (isNaN(fVal) || fVal < 20 || fVal > 20000 || guideBands.includes(input)) { alert("正しい周波数を入力してください。"); return; }
+  guideBands.push(input); document.getElementById("guideBandInput").value = ""; render();
 }
 
 function removeGuideBand() {
   const input = document.getElementById("guideBandInput").value.trim();
   const index = guideBands.indexOf(input);
-  if(index === -1) {
-    alert("帯域が見つかりません。");
-    return;
-  }
-  guideBands.splice(index, 1);
-  document.getElementById("guideBandInput").value = "";
-  render();
+  if(index === -1) { alert("帯域が見つかりません。"); return; }
+  guideBands.splice(index, 1); document.getElementById("guideBandInput").value = ""; render();
 }
 
 function change(b, value) { eq[b] = parseInt(value); render(); }
-
-function save(type) { 
-  localStorage.setItem("eq_" + type, JSON.stringify(eq)); 
-  updateStatus(); 
-  alert("設定を保存しました"); 
-}
-
+function save(type) { localStorage.setItem("eq_" + type, JSON.stringify(eq)); updateStatus(); alert("設定を保存しました"); }
 function load(type) {
   const data = localStorage.getItem("eq_" + type);
-  if (data) { 
-    eq = JSON.parse(data); 
-    bands = Object.keys(eq); 
-  } else { 
-    bands = ["80","100","125","160","200","250","315","400","500","630","800","1k","1.25k","1.6k","2k","2.5k","3.15k","4k","5k","6.3k","8k"];
-    eq = {};
-    bands.forEach(b => eq[b] = 0);
-  }
-  currentInstrument = type; 
-  render();
-  updateAutosaveMsg();
+  if (data) { eq = JSON.parse(data); bands = Object.keys(eq); } 
+  else { bands = [...defaultBands]; eq = {}; bands.forEach(b => eq[b] = 0); }
+  currentInstrument = type; render(); updateAutosaveMsg();
 }
 
 function autoSave() {
@@ -461,10 +429,9 @@ function autoSave() {
 
 function updateAutosaveMsg() {
     const msg = document.getElementById("autosaveStatus");
-    if (currentInstrument) msg.innerText = "現在 " + currentInstrument.toUpperCase() + " を編集中（30秒ごとに自動保存中）";
+    if (currentInstrument) msg.innerText = "現在 " + currentInstrument.toUpperCase() + " を編集中（10秒ごとに自動保存中）";
 }
 
-function resetEditOnly() { bands.forEach(b => eq[b]=0); render(); }
 function resetWithSave(type) { 
   if(confirm("保存データを削除しますか？")) { 
     localStorage.removeItem("eq_" + type); 
@@ -478,8 +445,19 @@ function updateStatus() { instruments.forEach(t => {
   if(targetStatus) targetStatus.innerText = localStorage.getItem("eq_" + t) ? "●保存済" : ""; 
 }); }
 
+/* -----------------------------------------
+    開発者用パスワード確認 (keion8396)
+----------------------------------------- */
+function checkPassword() {
+  const input = prompt("開発者用パスワードを入力してください：");
+  if (input !== null && window.btoa(input) === "a2Vpb244Mzk2") {
+    location.href = 'howling-precision.html';
+  } else if (input !== null) {
+    alert("アクセス権限がありません。");
+  }
+}
+
 init();
 </script>
 </body>
 </html>
-
